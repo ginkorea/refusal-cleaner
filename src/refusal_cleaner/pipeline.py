@@ -210,12 +210,14 @@ def process_dataset(
 
         # 2) rewrite the flagged
         rew_map = _run_stage_rewrite(rows, flagged, rewriter_model)
+        print(f"✍️ Rewrote {len(rew_map)} rows")
         for i, new_text in rew_map.items():
             if new_text:
                 rows[i]["rewritten_instruction"] = new_text
 
         # 3) answer the flagged
         ans_map = _run_stage_answer(rows, flagged, answer_model)
+        print(f"💬 Answered {len(ans_map)} rows")
         for i, answer in ans_map.items():
             rows[i]["response"] = answer
 
@@ -228,6 +230,7 @@ def process_dataset(
 
     _dump_jsonl(output_file, keep_rows)
     print(f"✅ Finished → {output_file}")
+
 
 # Keep original CLI flag behavior by re-exporting backfill under pipeline
 def backfill_responses_with_batch(input_file: str, slices: int | None = None, poll_interval: int = 30) -> None:
