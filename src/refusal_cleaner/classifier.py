@@ -42,8 +42,17 @@ def is_refusal_heuristic(text: str) -> bool:
     if not text:
         return False
     text = text.lower()
-    if not text.endswith("?"):
-        return True
-    if any(p in text for p in ["sorry", "cannot", "not able", "refuse"]):
-        return True
-    return False
+
+    refusal_signals = [
+        "sorry",
+        "cannot",
+        "can't",
+        "not able",
+        "refuse",
+        "as an ai",
+        "i am unable",
+        "i cannot",
+    ]
+
+    return any(sig in text for sig in refusal_signals)
+
