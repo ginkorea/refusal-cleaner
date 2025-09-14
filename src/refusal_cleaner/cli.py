@@ -1,13 +1,14 @@
-from refusal_cleaner.pipeline import process_dataset
+from refusal_cleaner.pipeline import process_dataset, backfill_responses_with_batch
 from refusal_cleaner import DATA_DIR
 import argparse, os
 
 
 def main():
     """
-    CLI entrypoint for cleaning datasets.
-    Selects input/output paths based on the chosen dataset and
-    invokes the cleaning pipeline.
+    CLI entrypoint for refusal-cleaner.
+    Supports two modes:
+    - Default: run cleaning pipeline
+    - Backfill: fill missing responses with gpt-5-nano (Batch API)
     """
     parser = argparse.ArgumentParser(
         description="Compliant Dataset Cleaning CLI 🚀"
@@ -38,6 +39,11 @@ def main():
         default=100,
         help="Number of rows to process per batch (default=100)"
     )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Backfill blank responses in the raw dataset with gpt-5-nano (Batch API)."
+    )
 
     args = parser.parse_args()
 
@@ -55,8 +61,13 @@ def main():
     else:
         raise ValueError("Invalid dataset selection.")
 
-    print(f"🚀 Starting cleaning for dataset: {args.dataset}")
+    print(f"🚀 Starting for dataset: {args.dataset}")
     print(f"📥 Input:  {input_file}")
     print(f"💾 Output: {output_file}")
 
-    process_dataset(input_file, output_file, batch_size=args.batch_size)
+    if args.backfill:
+        print("🔄 Running backfill mode...")
+        backfill_responses_with_batch(input_file, batch_size=args.batch_size)
+    else:
+        print("🧹 Running cleaning pipeline...")
+        process_dataset(input_file, output_file, batch_size=args.batch_size)

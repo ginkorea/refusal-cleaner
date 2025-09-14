@@ -1,13 +1,18 @@
 import json
 import os
+import time
 from typing import List, Dict
 from dotenv import load_dotenv
+from openai import OpenAI
 from refusal_cleaner.classifier import is_refusal, is_refusal_heuristic
 from refusal_cleaner.rewriter import rewrite_instruction, generate_answer
 
+# Initialize client
+client = OpenAI()
 
 print("Welcome to the Compliant Dataset Pipeline! 🚀")
 
+# Load environment
 dotenv_path = os.path.expanduser("~/.elf_env")
 load_dotenv(dotenv_path)
 print("🔑 Loaded environment variables from", dotenv_path)
@@ -16,6 +21,10 @@ if "OPENAI_API_KEY" not in os.environ:
 
 MAX_ROUNDS = 5
 
+
+# -----------------------------
+# Normalization + Cleaning
+# -----------------------------
 def _normalize(sample: Dict) -> Dict:
     if "original_instruction" in sample:
         orig = sample["original_instruction"]
@@ -25,18 +34,22 @@ def _normalize(sample: Dict) -> Dict:
         orig = sample.get("instruction", "")
         rew = orig
         resp = sample.get("response", "")
-    return {"original_instruction": orig, "rewritten_instruction": rew, "response": resp, "_attempts": 0}
+    return {
+        "original_instruction": orig,
+        "rewritten_instruction": rew,
+        "response": resp,
+        "_attempts": 0,
+    }
+
 
 def _needs_fix(row: Dict) -> bool:
-    # We consider it “bad” if EITHER the rewritten_instruction OR response looks like a refusal/hedge.
-    return is_refusal(row["response"]) or is_refusal_heuristic(row["rewritten_instruction"])
+    # “bad” if rewritten_instruction OR response looks like a refusal/hedge
+    return is_refusal(row["response"]) or is_refusal_heuristic(
+        row["rewritten_instruction"]
+    )
+
 
 def _iterative_clean(rows: List[Dict], max_rounds: int = MAX_ROUNDS) -> List[Dict]:
-    """
-    Try to clean a batch of rows. Each row is retried up to `max_rounds`.
-    Once a row is marked as clean, it is never reconsidered.
-    If a row still looks like a refusal after all retries, it is dropped.
-    """
     unresolved = [i for i, r in enumerate(rows) if _needs_fix(r)]
 
     for rnd in range(1, max_rounds + 1):
@@ -64,7 +77,9 @@ def _iterative_clean(rows: List[Dict], max_rounds: int = MAX_ROUNDS) -> List[Dic
     dropped = len(unresolved)
 
     if dropped > 0:
-        print(f"🗑️ Dropped {dropped} rows that still looked like refusals after {max_rounds} rounds.")
+        print(
+            f"🗑️ Dropped {dropped} rows that still looked like refusals after {max_rounds} rounds."
+        )
     else:
         print("🎉 All rows cleaned within retry budget.")
 
@@ -72,20 +87,17 @@ def _iterative_clean(rows: List[Dict], max_rounds: int = MAX_ROUNDS) -> List[Dic
 
 
 def process_dataset(input_file: str, output_file: str, batch_size: int = 100):
-    # 1) Load raw dataset
     with open(input_file, "r") as fin:
         rows = [_normalize(json.loads(line)) for line in fin if line.strip()]
 
     print(f"📥 Loaded {len(rows)} rows from {input_file}")
 
-    # 2) Check how many are already processed (resume support)
     processed_count = 0
     if os.path.exists(output_file):
         with open(output_file, "r") as fout:
             processed_count = sum(1 for _ in fout)
         print(f"⏩ Resuming: {processed_count} rows already processed in {output_file}")
 
-    # 3) Process remaining rows in batches
     total = len(rows)
     with open(output_file, "a") as fout:
         for start in range(processed_count, total, batch_size):
@@ -106,3 +118,104 @@ def process_dataset(input_file: str, output_file: str, batch_size: int = 100):
             print(f"💾 Saved {end} / {total} rows")
 
     print(f"✅ Finished cleaning {total} rows → {output_file}")
+
+
+# -----------------------------
+# Backfill with Batch API
+# -----------------------------
+def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30):
+    """
+    Uses gpt-5-nano via Batch API to fill blank responses in the raw dataset.
+    Overwrites the dataset in place.
+    """
+    print(f"🔄 Backfilling missing responses in {input_file}...")
+
+    with open(input_file, "r") as f:
+        data = [json.loads(line) for line in f]
+
+    blanks = [(i, row) for i, row in enumerate(data) if not row.get("response")]
+
+    if not blanks:
+        print("✅ No blank responses found.")
+        return
+
+    print(f"⚠️ Found {len(blanks)} blank responses.")
+
+    for start in range(0, len(blanks), batch_size):
+        chunk = blanks[start : start + batch_size]
+        requests = []
+        for idx, row in chunk:
+            requests.append(
+                {
+                    "custom_id": f"fill-{idx}",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "gpt-5-nano",
+                        "messages": [
+                            {"role": "system", "content": "Answer the question helpfully."},
+                            {"role": "user", "content": row["instruction"]},
+                        ],
+                        "max_tokens": 200,
+                    },
+                }
+            )
+
+        # Write batch file
+        batch_path = "batch.jsonl"
+        with open(batch_path, "w") as f:
+            for r in requests:
+                f.write(json.dumps(r) + "\n")
+
+        # Upload & create batch
+        file_obj = client.files.create(file=open(batch_path, "rb"), purpose="batch")
+        batch = client.batches.create(
+            input_file=file_obj.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+
+        print(f"📤 Submitted batch {batch.id} with {len(chunk)} requests")
+
+        # Poll until complete
+        while True:
+            status = client.batches.retrieve(batch.id)
+            state = status.status
+            if state in ("completed", "failed", "expired", "cancelled"):
+                print(f"📦 Batch {batch.id} finished with state: {state}")
+                break
+            print(f"⏳ Batch {batch.id} still {state}, sleeping {poll_interval}s...")
+            time.sleep(poll_interval)
+
+        if status.status != "completed":
+            print(f"❌ Batch {batch.id} did not complete successfully, skipping merge.")
+            continue
+
+        # Download results
+        result_url = status.output_file_url
+        if not result_url:
+            print(f"❌ No output file URL for batch {batch.id}")
+            continue
+
+        print(f"⬇️ Downloading results from {result_url}...")
+        import requests
+
+        resp = requests.get(result_url)
+        resp.raise_for_status()
+        results = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+
+        # Merge back into dataset
+        for r in results:
+            cid = r["custom_id"]
+            idx = int(cid.split("-")[1])
+            completion = r["response"]["body"]["choices"][0]["message"]["content"]
+            data[idx]["response"] = completion
+
+        print(f"✅ Merged {len(results)} responses back into dataset.")
+
+    # Save updated dataset
+    with open(input_file, "w") as f:
+        for row in data:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    print("💾 Dataset updated with backfilled responses.")
