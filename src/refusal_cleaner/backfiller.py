@@ -3,6 +3,8 @@ from typing import List, Dict, Tuple
 from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
+from refusal_cleaner.utils import choose_batch_size, chunk_indices   # ✅ shared
+
 
 dotenv_path = os.path.expanduser("~/.elf_env")
 load_dotenv(dotenv_path)
@@ -10,15 +12,7 @@ if "OPENAI_API_KEY" not in os.environ:
     raise RuntimeError("❌ OPENAI_API_KEY not found in ~/.elf_env")
 client = OpenAI()
 
-def _choose_batch_size(n: int) -> int:
-    if n <= 0:
-        return 0
-    if n < 1000:
-        return n
-    return max(1000, n // 10)
-
-def _chunk_indices(n: int, bs: int) -> List[Tuple[int, int]]:
-    return [(i, min(i + bs, n)) for i in range(0, n, bs)]
+# --- Backfiller logic ---
 
 def backfill_responses_with_batch(input_file: str, slices: int | None = None, poll_interval: int = 30) -> None:
     """
@@ -38,17 +32,11 @@ def backfill_responses_with_batch(input_file: str, slices: int | None = None, po
 
     # chunk math
     if slices is None:
-        bs = _choose_batch_size(n)
-        ranges = _chunk_indices(n, bs)
+        bs = choose_batch_size(n)
+        ranges = chunk_indices(n, bs)
     else:
         # round-robin split into 'slices'
         chunks = [blanks[i::max(1, slices)] for i in range(max(1, slices))]
-        # convert to index ranges for uniform handling
-        flat = []
-        for ch in chunks:
-            flat.append(ch)
-        # transform into contiguous windows for batch writing
-        # (we just iterate over lists directly below)
         ranges = None
 
     active: dict[str, List[Tuple[int, Dict]]] = {}
