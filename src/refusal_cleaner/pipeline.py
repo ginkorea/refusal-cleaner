@@ -130,6 +130,7 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
     """
     print(f"🔄 Backfilling missing responses in {input_file}...")
 
+    # Load dataset
     with open(input_file, "r") as f:
         data = [json.loads(line) for line in f]
 
@@ -141,43 +142,44 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
 
     print(f"⚠️ Found {len(blanks)} blank responses.")
 
+    # Process in chunks
     for start in range(0, len(blanks), batch_size):
-        chunk = blanks[start : start + batch_size]
+        chunk = blanks[start:start + batch_size]
         requests = []
         for idx, row in chunk:
-            requests.append(
-                {
-                    "custom_id": f"fill-{idx}",
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "model": "gpt-5-nano",
-                        "messages": [
-                            {"role": "system", "content": "Answer the question helpfully."},
-                            {"role": "user", "content": row["instruction"]},
-                        ],
-                        "max_tokens": 200,
-                    },
+            requests.append({
+                "custom_id": f"fill-{idx}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gpt-5-nano",
+                    "messages": [
+                        {"role": "system", "content": "Answer the question helpfully."},
+                        {"role": "user", "content": row.get("instruction") or row.get("original_instruction", "")}
+                    ],
+                    "max_tokens": 200
                 }
-            )
+            })
 
-        # Write batch file
+        # Write requests to a temporary .jsonl file
         batch_path = "batch.jsonl"
         with open(batch_path, "w") as f:
             for r in requests:
                 f.write(json.dumps(r) + "\n")
 
-        # Upload & create batch
+        # Upload file to OpenAI
         file_obj = client.files.create(file=open(batch_path, "rb"), purpose="batch")
+
+        # Submit batch
         batch = client.batches.create(
-            input_file=file_obj.id,
+            input_file_id=file_obj.id,   # ✅ correct field
             endpoint="/v1/chat/completions",
-            completion_window="24h",
+            completion_window="24h"
         )
 
         print(f"📤 Submitted batch {batch.id} with {len(chunk)} requests")
 
-        # Poll until complete
+        # Poll for completion
         while True:
             status = client.batches.retrieve(batch.id)
             state = status.status
@@ -192,24 +194,26 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
             continue
 
         # Download results
-        result_url = status.output_file_url
+        result_url = status.output_file.url if status.output_file else None
         if not result_url:
             print(f"❌ No output file URL for batch {batch.id}")
             continue
 
         print(f"⬇️ Downloading results from {result_url}...")
         import requests
-
         resp = requests.get(result_url)
         resp.raise_for_status()
         results = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
 
-        # Merge back into dataset
+        # Merge completions back into dataset
         for r in results:
-            cid = r["custom_id"]
-            idx = int(cid.split("-")[1])
-            completion = r["response"]["body"]["choices"][0]["message"]["content"]
-            data[idx]["response"] = completion
+            try:
+                cid = r["custom_id"]
+                idx = int(cid.split("-")[1])
+                completion = r["response"]["body"]["choices"][0]["message"]["content"]
+                data[idx]["response"] = completion
+            except Exception as e:
+                print(f"⚠️ Skipping bad result: {e}")
 
         print(f"✅ Merged {len(results)} responses back into dataset.")
 
@@ -219,3 +223,4 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print("💾 Dataset updated with backfilled responses.")
+
