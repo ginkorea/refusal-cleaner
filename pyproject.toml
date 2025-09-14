@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "refusal-cleaner"
+version = "0.1.0"
+description = "A pipeline for cleaning instruction datasets by removing refusals and rewriting prompts into safe, answerable questions."
+readme = "README.md"
+authors = [
+  { name="Joshua Gompert", email="joshua.gompert@gmail.com" }
+]
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "datasets",
+    "python-dotenv"
+]
+
+[project.urls]
+Homepage = "https://github.com/ginkorea/refusal-cleaner"
+Issues = "https://github.com/ginkorea/refusal-cleaner/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+refusal-cleaner = "refusal_cleaner.cli:main"
+
+
+

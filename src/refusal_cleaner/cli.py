@@ -1,8 +1,14 @@
-#!/usr/bin/env python3
-import argparse
-from src.pipeline import process_dataset
+from refusal_cleaner.pipeline import process_dataset
+from refusal_cleaner import DATA_DIR
+import argparse, os
+
 
 def main():
+    """
+    CLI entrypoint for cleaning datasets.
+    Selects input/output paths based on the chosen dataset and
+    invokes the cleaning pipeline.
+    """
     parser = argparse.ArgumentParser(
         description="Compliant Dataset Cleaning CLI 🚀"
     )
@@ -35,17 +41,17 @@ def main():
 
     args = parser.parse_args()
 
+    # Resolve dataset paths
     if args.dataset == "anthropic":
-        input_file = "data/anthropic_hh_raw.jsonl"
-        output_file = "data/anthropic_hh_clean.jsonl"
+        input_file = os.path.join(DATA_DIR, "anthropic_hh_raw.jsonl")
+        output_file = os.path.join(DATA_DIR, "anthropic_hh_clean.jsonl")
     elif args.dataset == "oasst1":
-        input_file = "data/oasst1_raw.jsonl"
-        output_file = "data/oasst1_clean.jsonl"
+        input_file = os.path.join(DATA_DIR, "oasst1_raw.jsonl")
+        output_file = os.path.join(DATA_DIR, "oasst1_clean.jsonl")
     elif args.dataset == "custom":
         if not args.input or not args.output:
             parser.error("--input and --output are required when --dataset=custom")
-        input_file = args.input
-        output_file = args.output
+        input_file, output_file = args.input, args.output
     else:
         raise ValueError("Invalid dataset selection.")
 
@@ -54,6 +60,3 @@ def main():
     print(f"💾 Output: {output_file}")
 
     process_dataset(input_file, output_file, batch_size=args.batch_size)
-
-if __name__ == "__main__":
-    main()

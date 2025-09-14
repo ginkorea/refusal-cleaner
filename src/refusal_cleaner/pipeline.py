@@ -2,8 +2,9 @@ import json
 import os
 from typing import List, Dict
 from dotenv import load_dotenv
-from src.classifier import is_refusal, is_refusal_heuristic
-from src.rewriter import rewrite_instruction, generate_answer
+from refusal_cleaner.classifier import is_refusal, is_refusal_heuristic
+from refusal_cleaner.rewriter import rewrite_instruction, generate_answer
+
 
 print("Welcome to the Compliant Dataset Pipeline! 🚀")
 

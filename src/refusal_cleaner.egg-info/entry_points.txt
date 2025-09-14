@@ -1,0 +1,2 @@
+[console_scripts]
+refusal-cleaner = refusal_cleaner.cli:main
