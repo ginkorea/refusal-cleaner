@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "refusal-cleaner"
-version = "0.1.11"
+version = "0.2.0"
 
 description = "A pipeline for cleaning instruction datasets by removing refusals and rewriting prompts into safe, answerable questions."
 readme = "README.md"

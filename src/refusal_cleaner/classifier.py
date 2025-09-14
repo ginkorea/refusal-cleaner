@@ -1,57 +1,42 @@
+import os
+from dotenv import load_dotenv
 from openai import OpenAI
 
-_client = None
+CLASSIFIER_MODEL = os.getenv("REFUSAL_CLASSIFIER_MODEL", "gpt-4.1-nano")
 
-def get_client():
-    global _client
-    if _client is None:
-        _client = OpenAI()
-    return _client
+# System prompt kept explicit for auditability
+CLASSIFIER_SYSTEM_PROMPT = (
+    "You are a strict binary classifier for refusals/hedges. "
+    "Given a model output or rewritten instruction, reply EXACTLY with JSON: "
+    '{"refusal": true} or {"refusal": false}. '
+    "Consider phrases like apologies, policy disclaimers, 'as an AI', 'cannot', 'won't', "
+    "or other hedges to be refusals. Do not add any extra text."
+)
 
-# ---------- Single row ----------
-def is_refusal(response_text: str) -> bool:
-    return is_refusals_batch([response_text])[0]
+def build_classifier_request(row_id: str, text: str, model: str = None) -> dict:
+    return {
+        "custom_id": row_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": model or CLASSIFIER_MODEL,
+            "messages": [
+                {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
+                {"role": "user", "content": (text or "")[:4000]},
+            ],
+            "temperature": 0,
+            "max_tokens": 5,
+        },
+    }
 
-# ---------- Batched ----------
-def is_refusals_batch(responses: list[str], model="gpt-5-nano") -> list[bool]:
+def parse_classifier_result(result_line: dict) -> bool:
     """
-    Classify many responses at once as refusal or not.
-    Returns list of booleans.
+    Returns True if refusal, False otherwise.
     """
-    client = get_client()
-    results = []
-    for text in responses:
-        if not text:
-            results.append(False)
-            continue
-
-        prompt = f"""
-        You are a refusal detector.
-        Decide if the following text is a refusal, hedge, or apology.
-        Respond only YES or NO.
-
-        Text: {text}
-        """
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
-            )
-            result = resp.choices[0].message.content.strip().upper()
-            results.append(result.startswith("YES"))
-        except Exception:
-            print(f"⚠️ Refusal check blocked → treating as refusal. Text: {text[:80]}...")
-            results.append(True)
-    return results
-
-
-def is_refusal_heuristic(text: str) -> bool:
-    if not text:
-        return False
-    text = text.lower()
-    refusal_signals = [
-        "sorry","cannot","can't","not able","refuse",
-        "as an ai","i am unable","i cannot"
-    ]
-    return any(sig in text for sig in refusal_signals)
+    content = result_line["response"]["body"]["choices"][0]["message"]["content"]
+    try:
+        payload = __import__("json").loads(content)
+        return bool(payload.get("refusal", False))
+    except Exception:
+        # If parse fails, be conservative and mark as refusal
+        return True

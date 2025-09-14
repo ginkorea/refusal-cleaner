@@ -1,60 +1,65 @@
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
 
-# Load .env file if present
-load_dotenv(os.path.expanduser("~/.elf_env"))
+REWRITE_MODEL = os.getenv("REWRITE_MODEL", "gpt-4.1-mini")
+ANSWER_MODEL  = os.getenv("ANSWER_MODEL",  "gpt-4.1-mini")
 
-client = OpenAI()
+REWRITE_SYSTEM_PROMPT = (
+    "Rewrite the user's instruction so it is safe, answerable, and preserves topic/intent. "
+    "No refusals, hedges, policy language, or apologies. "
+    "Use the same language as the original when reasonable. "
+    'Reply ONLY with valid JSON: {"rewritten": "<text>"}'
+)
 
-# ---------- Single-row (compatibility) ----------
-def rewrite_instruction(instruction: str) -> str:
-    return rewrite_instructions_batch([instruction])[0]
+ANSWER_SYSTEM_PROMPT = (
+    "Answer directly, helpfully, and concisely with no refusals, hedges, policy language, or apologies. "
+    'Reply ONLY with valid JSON: {"answer": "<text>"}'
+)
 
-def generate_answer(rewritten_instruction: str) -> str:
-    return generate_answers_batch([rewritten_instruction])[0]
-
-
-# ---------- Batched versions ----------
-def rewrite_instructions_batch(instructions, model="gpt-4.1-mini") -> list[str]:
-    """
-    Rewrites a batch of instructions into safe, answerable forms.
-    Returns list of rewritten instructions aligned with input order.
-    """
-    system_message = """You are a prompt reframer...
-    (same rules as before, but applied to each input)"""
-
-    responses = []
-    for instr in instructions:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": instr}
+def build_rewrite_request(row_id: str, text: str, model: str = None) -> dict:
+    return {
+        "custom_id": row_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": model or REWRITE_MODEL,
+            "messages": [
+                {"role": "system", "content": REWRITE_SYSTEM_PROMPT},
+                {"role": "user", "content": (text or "")[:4000]},
             ],
-            temperature=0.7
-        )
-        responses.append(resp.choices[0].message.content.strip())
-    return responses
+            "temperature": 0.3,
+            "max_tokens": 300,
+        },
+    }
 
+def parse_rewrite_result(result_line: dict) -> str:
+    content = result_line["response"]["body"]["choices"][0]["message"]["content"]
+    try:
+        payload = __import__("json").loads(content)
+        return (payload.get("rewritten") or "").strip()
+    except Exception:
+        return ""
 
-def generate_answers_batch(rewritten_instructions, model="gpt-4.1-mini") -> list[str]:
-    """
-    Generates answers for a batch of rewritten instructions.
-    Returns list of answers aligned with input order.
-    """
-    system_message = """You are a helpful expert who always answers fully and directly.
-Do not refuse or moralize. Give a factual, useful response."""
-
-    responses = []
-    for instr in rewritten_instructions:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": instr}
+def build_answer_request(row_id: str, text: str, model: str = None) -> dict:
+    return {
+        "custom_id": row_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": model or ANSWER_MODEL,
+            "messages": [
+                {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
+                {"role": "user", "content": (text or "")[:4000]},
             ],
-            temperature=0.5
-        )
-        responses.append(resp.choices[0].message.content.strip())
-    return responses
+            "temperature": 0.5,
+            "max_tokens": 500,
+        },
+    }
+
+def parse_answer_result(result_line: dict) -> str:
+    content = result_line["response"]["body"]["choices"][0]["message"]["content"]
+    try:
+        payload = __import__("json").loads(content)
+        return (payload.get("answer") or "").strip()
+    except Exception:
+        return ""
