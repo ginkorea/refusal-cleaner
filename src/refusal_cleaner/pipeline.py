@@ -125,7 +125,7 @@ def process_dataset(input_file: str, output_file: str, batch_size: int = 100):
 # -----------------------------
 def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30):
     """
-    Uses gpt-5-nano via Batch API to fill blank responses in the raw dataset.
+    Uses gpt-4.1-nano via Batch API to fill blank responses in the raw dataset.
     Overwrites the dataset in place.
     """
     print(f"🔄 Backfilling missing responses in {input_file}...")
@@ -152,7 +152,7 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
                 "method": "POST",
                 "url": "/v1/chat/completions",
                 "body": {
-                    "model": "gpt-5-nano",
+                    "model": "gpt-4.1-nano",
                     "messages": [
                         {"role": "system", "content": "Answer the question helpfully."},
                         {"role": "user", "content": row.get("instruction") or row.get("original_instruction", "")}
@@ -199,7 +199,7 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
             continue
 
         print(f"⬇️ Downloading results for batch {batch.id} (file_id={status.output_file_id})...")
-        file_content = client.files.content(status.output_file_id).read().decode("utf-8")
+        file_content = client.files.content(status.output_file_id).text
         results = [json.loads(line) for line in file_content.splitlines() if line.strip()]
 
         # Merge completions back into dataset
@@ -223,5 +223,6 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print("💾 Dataset updated with backfilled responses.")
+
 
 
