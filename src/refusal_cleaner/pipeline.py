@@ -123,10 +123,11 @@ def process_dataset(input_file: str, output_file: str, batch_size: int = 100):
 # -----------------------------
 # Backfill with Batch API
 # -----------------------------
-def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30):
+def backfill_responses_with_batch(input_file, poll_interval=30):
     """
     Uses gpt-4.1-nano via Batch API to fill blank responses in the raw dataset.
-    Overwrites the dataset in place.
+    Splits into exactly 10 batches for parallel processing.
+    Overwrites the dataset in place incrementally as results return.
     """
     print(f"🔄 Backfilling missing responses in {input_file}...")
 
@@ -135,94 +136,80 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
         data = [json.loads(line) for line in f]
 
     blanks = [(i, row) for i, row in enumerate(data) if not row.get("response")]
-
     if not blanks:
         print("✅ No blank responses found.")
         return
-
     print(f"⚠️ Found {len(blanks)} blank responses.")
 
-    # Process in chunks
-    for start in range(0, len(blanks), batch_size):
-        chunk = blanks[start:start + batch_size]
-        requests = []
-        for idx, row in chunk:
-            requests.append({
-                "custom_id": f"fill-{idx}",
-                "method": "POST",
-                "url": "/v1/chat/completions",
-                "body": {
-                    "model": "gpt-4.1-nano",
-                    "messages": [
-                        {"role": "system", "content": "Answer the question helpfully."},
-                        {"role": "user", "content": row.get("instruction") or row.get("original_instruction", "")}
-                    ],
-                    "max_tokens": 200
-                }
-            })
+    # Split into 10 slices
+    total = len(blanks)
+    slice_size = (total + 9) // 10  # ceiling division
+    slices = [blanks[i:i + slice_size] for i in range(0, total, slice_size)]
+    print(f"✂️ Divided into {len(slices)} slices of ~{slice_size} rows each")
 
-        # Write requests to temporary batch file
-        batch_path = "batch.jsonl"
+    # Helper: submit one batch
+    def submit_slice(slice_data, slice_idx):
+        batch_path = f"batch_slice_{slice_idx}.jsonl"
         with open(batch_path, "w") as f:
-            for r in requests:
-                f.write(json.dumps(r) + "\n")
+            for idx, row in slice_data:
+                req = {
+                    "custom_id": f"fill-{idx}",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "gpt-4.1-nano",
+                        "messages": [
+                            {"role": "system", "content": "Answer the question helpfully."},
+                            {"role": "user", "content": row.get("instruction") or row.get("original_instruction", "")}
+                        ],
+                        "max_tokens": 512,
+                    },
+                }
+                f.write(json.dumps(req) + "\n")
 
-        # Upload file to OpenAI
         file_obj = client.files.create(file=open(batch_path, "rb"), purpose="batch")
-
-        # Submit batch
         batch = client.batches.create(
             input_file_id=file_obj.id,
             endpoint="/v1/chat/completions",
             completion_window="24h"
         )
+        print(f"📤 Submitted slice {slice_idx} as batch {batch.id} with {len(slice_data)} requests")
+        return batch.id, slice_data
 
-        print(f"📤 Submitted batch {batch.id} with {len(chunk)} requests")
+    # Submit all 10 at once
+    active = {}
+    for i, slice_data in enumerate(slices):
+        bid, chunk = submit_slice(slice_data, i)
+        active[bid] = chunk
 
-        # Poll for completion
-        while True:
-            status = client.batches.retrieve(batch.id)
-            state = status.status
-            if state in ("completed", "failed", "expired", "cancelled"):
-                print(f"📦 Batch {batch.id} finished with state: {state}")
-                break
-            print(f"⏳ Batch {batch.id} still {state}, sleeping {poll_interval}s...")
+    completed = 0
+    while active:
+        for bid in list(active.keys()):
+            status = client.batches.retrieve(bid)
+            if status.status in ("completed", "failed", "expired", "cancelled"):
+                chunk = active.pop(bid)
+                if status.status == "completed" and status.output_file_id:
+                    file_content = client.files.content(status.output_file_id).text
+                    results = [json.loads(line) for line in file_content.splitlines() if line.strip()]
+                    merged = 0
+                    for r in results:
+                        try:
+                            idx = int(r["custom_id"].split("-")[1])
+                            data[idx]["response"] = r["response"]["body"]["choices"][0]["message"]["content"]
+                            merged += 1
+                        except Exception as e:
+                            print(f"⚠️ Skipping bad result: {e}")
+                    print(f"✅ Batch {bid} merged {merged} responses")
+                    completed += len(chunk)
+
+                    # Save progress incrementally
+                    with open(input_file, "w") as f:
+                        for row in data:
+                            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                else:
+                    print(f"❌ Batch {bid} failed or incomplete")
+        if active:
+            print(f"⏳ {len(active)} batches still running...")
             time.sleep(poll_interval)
 
-        if status.status != "completed":
-            print(f"❌ Batch {batch.id} did not complete successfully, skipping merge.")
-            continue
-
-        # Download results
-        if not status.output_file_id:
-            print(f"❌ No output file for batch {batch.id}")
-            continue
-
-        print(f"⬇️ Downloading results for batch {batch.id} (file_id={status.output_file_id})...")
-        file_content = client.files.content(status.output_file_id).text
-        results = [json.loads(line) for line in file_content.splitlines() if line.strip()]
-
-        # Merge completions back into dataset
-        merged = 0
-        for r in results:
-            try:
-                cid = r.get("custom_id", "")
-                if cid.startswith("fill-"):
-                    idx = int(cid.split("-")[1])
-                    completion = r["response"]["body"]["choices"][0]["message"]["content"]
-                    data[idx]["response"] = completion
-                    merged += 1
-            except Exception as e:
-                print(f"⚠️ Skipping bad result: {e}")
-
-        print(f"✅ Merged {merged} responses back into dataset.")
-
-    # Save updated dataset
-    with open(input_file, "w") as f:
-        for row in data:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-    print("💾 Dataset updated with backfilled responses.")
-
-
-
+    print(f"🎉 Finished merging all batches. Total completed: {completed}")
