@@ -67,7 +67,7 @@ def main():
 
     if args.backfill:
         print("🔄 Running backfill mode...")
-        backfill_responses_with_batch(input_file, batch_size=args.batch_size)
+        backfill_responses_with_batch(input_file)
     else:
         print("🧹 Running cleaning pipeline...")
         process_dataset(input_file, output_file, batch_size=args.batch_size)
