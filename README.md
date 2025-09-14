@@ -1,7 +1,3 @@
-Here’s a **full new `README.md`** that reflects the current state of your project (PyPI install, `refusal-cleaner` CLI entrypoint, recursive batch pipeline, and backfiller):
-
----
-
 # 🧹 Refusal-Cleaner
 
 [![PyPI](https://img.shields.io/pypi/v/refusal-cleaner.svg)](https://pypi.org/project/refusal-cleaner/)
