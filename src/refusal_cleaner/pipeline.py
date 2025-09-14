@@ -161,7 +161,7 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
                 }
             })
 
-        # Write requests to a temporary .jsonl file
+        # Write requests to temporary batch file
         batch_path = "batch.jsonl"
         with open(batch_path, "w") as f:
             for r in requests:
@@ -172,7 +172,7 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
 
         # Submit batch
         batch = client.batches.create(
-            input_file_id=file_obj.id,   # ✅ correct field
+            input_file_id=file_obj.id,
             endpoint="/v1/chat/completions",
             completion_window="24h"
         )
@@ -194,28 +194,28 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
             continue
 
         # Download results
-        result_url = status.output_file.url if status.output_file else None
-        if not result_url:
-            print(f"❌ No output file URL for batch {batch.id}")
+        if not status.output_file_id:
+            print(f"❌ No output file for batch {batch.id}")
             continue
 
-        print(f"⬇️ Downloading results from {result_url}...")
-        import requests
-        resp = requests.get(result_url)
-        resp.raise_for_status()
-        results = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+        print(f"⬇️ Downloading results for batch {batch.id} (file_id={status.output_file_id})...")
+        file_content = client.files.content(status.output_file_id).read().decode("utf-8")
+        results = [json.loads(line) for line in file_content.splitlines() if line.strip()]
 
         # Merge completions back into dataset
+        merged = 0
         for r in results:
             try:
-                cid = r["custom_id"]
-                idx = int(cid.split("-")[1])
-                completion = r["response"]["body"]["choices"][0]["message"]["content"]
-                data[idx]["response"] = completion
+                cid = r.get("custom_id", "")
+                if cid.startswith("fill-"):
+                    idx = int(cid.split("-")[1])
+                    completion = r["response"]["body"]["choices"][0]["message"]["content"]
+                    data[idx]["response"] = completion
+                    merged += 1
             except Exception as e:
                 print(f"⚠️ Skipping bad result: {e}")
 
-        print(f"✅ Merged {len(results)} responses back into dataset.")
+        print(f"✅ Merged {merged} responses back into dataset.")
 
     # Save updated dataset
     with open(input_file, "w") as f:
@@ -223,4 +223,5 @@ def backfill_responses_with_batch(input_file, batch_size=1000, poll_interval=30)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print("💾 Dataset updated with backfilled responses.")
+
 
