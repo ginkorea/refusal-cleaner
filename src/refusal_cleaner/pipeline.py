@@ -31,28 +31,45 @@ def _needs_fix(row: Dict) -> bool:
     # We consider it “bad” if EITHER the rewritten_instruction OR response looks like a refusal/hedge.
     return is_refusal(row["response"]) or is_refusal_heuristic(row["rewritten_instruction"])
 
-def _iterative_clean(rows: List[Dict], max_rounds: int = MAX_ROUNDS):
+def _iterative_clean(rows: List[Dict], max_rounds: int = MAX_ROUNDS) -> List[Dict]:
+    """
+    Try to clean a batch of rows. Each row is retried up to `max_rounds`.
+    Once a row is marked as clean, it is never reconsidered.
+    If a row still looks like a refusal after all retries, it is dropped.
+    """
+    unresolved = [i for i, r in enumerate(rows) if _needs_fix(r)]
+
     for rnd in range(1, max_rounds + 1):
-        todo = [i for i, r in enumerate(rows) if _needs_fix(r)]
-        print(f"🌀 Round {rnd}: {len(todo)} rows to fix")
-        if not todo:
+        print(f"🌀 Round {rnd}: {len(unresolved)} rows to fix")
+        if not unresolved:
             print("✅ Clean set achieved.")
             break
-        for i in todo:
+
+        next_round = []
+        for i in unresolved:
             r = rows[i]
             r["_attempts"] += 1
-            # 1) stronger reframing
             rewritten = rewrite_instruction(r["original_instruction"])
-            # 2) answer generation
             answer = generate_answer(rewritten)
             r["rewritten_instruction"] = rewritten
             r["response"] = answer
 
-    remaining = sum(1 for r in rows if _needs_fix(r))
-    if remaining:
-        print(f"⚠️ {remaining} rows still look hedged/refusal-like after {max_rounds} rounds.")
+            if _needs_fix(r):
+                next_round.append(i)
+
+        unresolved = next_round
+
+    # Drop any rows that still look like refusals
+    cleaned = [r for i, r in enumerate(rows) if i not in unresolved]
+    dropped = len(unresolved)
+
+    if dropped > 0:
+        print(f"🗑️ Dropped {dropped} rows that still looked like refusals after {max_rounds} rounds.")
     else:
         print("🎉 All rows cleaned within retry budget.")
+
+    return cleaned
+
 
 def process_dataset(input_file: str, output_file: str, batch_size: int = 100):
     # 1) Load raw dataset
@@ -76,9 +93,9 @@ def process_dataset(input_file: str, output_file: str, batch_size: int = 100):
             batch = rows[start:end]
             print(f"⚙️ Processing rows {start} → {end}...")
 
-            _iterative_clean(batch, MAX_ROUNDS)
+            cleaned_batch = _iterative_clean(batch, MAX_ROUNDS)
 
-            for r in batch:
+            for r in cleaned_batch:
                 out = {
                     "original_instruction": r["original_instruction"],
                     "rewritten_instruction": r["rewritten_instruction"],
