@@ -43,18 +43,6 @@ def _dump_jsonl(path: str, rows: Iterable[Dict]) -> None:
             }
             f.write(json.dumps(out, ensure_ascii=False) + "\n")
 
-# ---------- batching math ----------
-def _choose_batch_size(n: int) -> int:
-    """Your rule: split into ~10 chunks, but keep chunk size >= 1000."""
-    if n <= 0:
-        return 0
-    if n < 1000:
-        return n
-    return max(1000, n // 10)
-
-def _chunk_indices(n: int, bs: int) -> List[Tuple[int, int]]:
-    return [(i, min(i + bs, n)) for i in range(0, n, bs)]
-
 # ---------- Batch plumbing ----------
 def _submit_batch(requests: List[Dict]) -> str:
     tmp = Path(f"batch_{uuid.uuid4().hex}.jsonl")
@@ -226,13 +214,12 @@ def process_dataset(
     # Final pass: drop still-refusing
     print("\n🔍 Final refusal pass and drop")
     final_map = _run_stage_classify(rows, list(range(len(rows))), classifier_model)
-    keep_rows = [r for i, r in enumerate(rows) if not final_map.get(i, False)]
+    keep_rows = [r for i, r in enumerate(rows) if final_map.get(i) is False]
     dropped = len(rows) - len(keep_rows)
     print(f"🗑 Dropped {dropped} refusals; kept {len(keep_rows)}")
 
     _dump_jsonl(output_file, keep_rows)
     print(f"✅ Finished → {output_file}")
-
 
 # Keep original CLI flag behavior by re-exporting backfill under pipeline
 def backfill_responses_with_batch(input_file: str, slices: int | None = None, poll_interval: int = 30) -> None:

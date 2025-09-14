@@ -37,10 +37,9 @@ def backfill_responses_with_batch(input_file: str, slices: int | None = None, po
     else:
         # round-robin split into 'slices'
         chunks = [blanks[i::max(1, slices)] for i in range(max(1, slices))]
-        ranges = None
 
     active: dict[str, List[Tuple[int, Dict]]] = {}
-    # Submit batches
+
     if slices is None:
         for (lo, hi) in ranges:
             subset = blanks[lo:hi]
@@ -66,7 +65,6 @@ def backfill_responses_with_batch(input_file: str, slices: int | None = None, po
             active[batch.id] = subset
             print(f"📤 Submitted backfill batch {batch.id} with {len(subset)} rows")
     else:
-        # round-robin lists
         for ch in chunks:
             if not ch:
                 continue
@@ -104,9 +102,11 @@ def backfill_responses_with_batch(input_file: str, slices: int | None = None, po
                     for r in results:
                         try:
                             idx = int(r["custom_id"].split("-")[1])
-                            data[idx]["response"] = r["response"]["body"]["choices"][0]["message"]["content"]
+                            content = r["response"]["body"]["choices"][0]["message"].get("content", "")
+                            data[idx]["response"] = content
                         except Exception as e:
                             print(f"⚠️ Backfill parse skip: {e}")
+                            data[idx]["response"] = ""
                     print(f"✅ Backfill batch {bid} merged {len(results)} rows")
                 else:
                     print(f"❌ Backfill batch {bid} failed ({st.status})")
@@ -118,3 +118,4 @@ def backfill_responses_with_batch(input_file: str, slices: int | None = None, po
         for row in data:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print("💾 Backfill complete — dataset updated.")
+
