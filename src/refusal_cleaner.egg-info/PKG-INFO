@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: refusal-cleaner
-Version: 0.1.10
+Version: 0.1.11
 Summary: A pipeline for cleaning instruction datasets by removing refusals and rewriting prompts into safe, answerable questions.
 Author-email: Joshua Gompert <joshua.gompert@gmail.com>
 License: MIT License
