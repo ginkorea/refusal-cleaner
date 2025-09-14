@@ -1,18 +1,11 @@
+import argparse
+import os
 from refusal_cleaner.pipeline import process_dataset, backfill_responses_with_batch
-from refusal_cleaner import DATA_DIR
-import argparse, os
 
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 def main():
-    """
-    CLI entrypoint for refusal-cleaner.
-    Supports two modes:
-    - Default: run cleaning pipeline
-    - Backfill: fill missing responses with gpt-5-nano (Batch API)
-    """
-    parser = argparse.ArgumentParser(
-        description="Compliant Dataset Cleaning CLI 🚀"
-    )
+    parser = argparse.ArgumentParser(description="Compliant Dataset Cleaning CLI 🚀")
 
     parser.add_argument(
         "--dataset",
@@ -34,15 +27,15 @@ def main():
         help="Custom output JSONL file (required if --dataset=custom)"
     )
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=100,
-        help="Number of rows to process per batch (default=100)"
-    )
-    parser.add_argument(
         "--backfill",
         action="store_true",
-        help="Backfill blank responses in the raw dataset with gpt-5-nano (Batch API)."
+        help="Run backfill mode instead of cleaning."
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=30,
+        help="Polling interval in seconds for batch jobs."
     )
 
     args = parser.parse_args()
@@ -67,7 +60,7 @@ def main():
 
     if args.backfill:
         print("🔄 Running backfill mode...")
-        backfill_responses_with_batch(input_file)
+        backfill_responses_with_batch(input_file, poll_interval=args.poll_interval)
     else:
-        print("🧹 Running cleaning pipeline...")
-        process_dataset(input_file, output_file, batch_size=args.batch_size)
+        print("🌀 Running full cleaning mode...")
+        process_dataset(input_file, output_file, poll_interval=args.poll_interval)
