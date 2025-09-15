@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+# utility script to create a "head" version of a dataset file
+# by copying the first N lines and backing up the original
+# usage: python make_head_copy.py <dataset.jsonl> [N]
+# designed for testing and quick iterations on smaller datasets
+
 import shutil
 import sys
 from pathlib import Path
 
 def make_head_copy(path: str, n: int = 500):
+    """Create a head copy of the dataset file with first N lines."""
     orig = Path(path)
     bak = orig.with_suffix(orig.suffix + ".bak")
     if not orig.exists():
