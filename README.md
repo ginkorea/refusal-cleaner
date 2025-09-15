@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="refusal-cleaner-spa.png" alt="Refusal Cleaner" width="600"/>
+</p>
+
 # 🧹 Refusal-Cleaner
 
 [![PyPI](https://img.shields.io/pypi/v/refusal-cleaner.svg)](https://pypi.org/project/refusal-cleaner/)
@@ -6,6 +10,8 @@
 [![Last Commit](https://img.shields.io/github/last-commit/ginkorea/refusal-cleaner)](https://github.com/ginkorea/refusal-cleaner/commits/main)
 
 ---
+
+
 
 **Refusal-Cleaner** is a high-throughput pipeline for **cleaning instruction–response datasets**.
 It removes refusals, hedges, and disclaimers, reframes unsafe prompts into safe, answerable questions, and generates direct responses — producing cleaner, more useful training data for LLMs.
