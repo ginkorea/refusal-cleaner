@@ -95,16 +95,16 @@ def _run_stage_classify(rows: List[Dict], indices: List[int], model: str) -> Tup
     out: Dict[int, bool] = {}
     batches = {}
     skipped = 0
-    to_submit: List[Tuple[int, dict]] = []
 
     for lo, hi in chunk_indices(n, bs):
+        to_submit: List[Tuple[int, dict]] = []
         for pos in range(lo, hi):
             idx = indices[pos]
             text = rows[idx]["response"] or rows[idx]["rewritten_instruction"]
             req = build_classifier_request(row_id=f"classify-{idx}", text=text, model=model)
 
             if req.get("method") == "SKIP":
-                # Regex pre-filter: immediate result, no API call
+                # Regex pre-filter: immediate refusal result (still flagged for rewrite/answer)
                 out[idx] = True
                 skipped += 1
             else:
@@ -114,10 +114,9 @@ def _run_stage_classify(rows: List[Dict], indices: List[int], model: str) -> Tup
             reqs = [r for _, r in to_submit]
             bid = _submit_batch(reqs)
             batches[bid] = {"kind": "classify", "map": [i for i, _ in to_submit]}
-            to_submit = []
 
+    # Poll API batches
     results = _poll_batches(batches)
-
     for bid, info in results.items():
         if info["status"] != "completed":
             continue
@@ -133,6 +132,7 @@ def _run_stage_classify(rows: List[Dict], indices: List[int], model: str) -> Tup
     print(f"📊 Classification summary → {total} total | {skipped} via regex | {used_api} via API")
 
     return out, skipped, used_api
+
 
 
 
