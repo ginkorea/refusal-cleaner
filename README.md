@@ -148,7 +148,3 @@ Most instruction datasets are polluted with refusals:
 ---
 
 ⭐ If you find this useful, please give it a star!
-
----
-
-Do you want me to **apply this version directly to your `README.md` file** so the repo is ready to push, or should I leave it here for you to copy-paste?
