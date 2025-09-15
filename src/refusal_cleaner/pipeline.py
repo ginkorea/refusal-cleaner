@@ -209,12 +209,16 @@ def process_dataset(
 
     total_regex = 0
     total_api = 0
+    modified_idx: set[int] = set(range(len(rows)))   # only round 1 starts full
 
     for round_idx in range(1, rounds + 1):
-        print(f"\n🔁 Round {round_idx} starting with {len(rows)} rows")
+        if not modified_idx:
+            print(f"\n🔁 Round {round_idx}: nothing left to check, stopping early.")
+            break
 
-        all_idx = list(range(len(rows)))
-        cls_map, skipped, used_api = _run_stage_classify(rows, all_idx, classifier_model)
+        print(f"\n🔁 Round {round_idx} starting with {len(modified_idx)} rows")
+
+        cls_map, skipped, used_api = _run_stage_classify(rows, sorted(modified_idx), classifier_model)
         total_regex += skipped
         total_api += used_api
 
@@ -222,7 +226,8 @@ def process_dataset(
         print(f"⚠️ Classifier flagged {len(flagged)} rows")
 
         if not flagged:
-            break
+            modified_idx.clear()
+            continue
 
         rew_map = _run_stage_rewrite(rows, flagged, rewriter_model)
         print(f"✍️ Rewrote {len(rew_map)} rows")
@@ -235,7 +240,10 @@ def process_dataset(
         for i, answer in ans_map.items():
             rows[i]["response"] = answer
 
-    # Final pass
+        # Next round: only recheck what was just changed
+        modified_idx = set(flagged)
+
+    # Final pass on ALL rows
     print("\n🔍 Final refusal pass and drop")
     final_map, skipped, used_api = _run_stage_classify(rows, list(range(len(rows))), classifier_model)
     total_regex += skipped
@@ -245,13 +253,13 @@ def process_dataset(
     dropped = len(rows) - len(keep_rows)
     print(f"🗑 Dropped {dropped} refusals; kept {len(keep_rows)}")
 
-    # Cumulative usage report
     print(f"\n📊 Cumulative classifier usage across all rounds:")
     print(f"   - {total_regex} rows handled via regex pre-filter")
     print(f"   - {total_api} rows handled via API")
 
     _dump_jsonl(output_file, keep_rows)
     print(f"✅ Finished → {output_file}")
+
 
 # Keep original CLI flag behavior by re-exporting backfill under pipeline
 def backfill_responses_with_batch(input_file: str, slices: int | None = None, poll_interval: int = 30) -> None:
