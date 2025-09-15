@@ -80,25 +80,45 @@ def _poll_batches(active: Dict[str, Dict], poll_interval: int = 20) -> Dict[str,
     return done
 
 # ---------- Stage runners ----------
-def _run_stage_classify(rows: List[Dict], indices: List[int], model: str) -> Dict[int, bool]:
-    """Returns {row_idx: is_refusal_bool}"""
+def _run_stage_classify(rows: List[Dict], indices: List[int], model: str) -> Tuple[Dict[int, bool], int, int]:
+    """
+    Returns:
+      - dict {row_idx: is_refusal_bool}
+      - skipped (regex count)
+      - used_api (API count)
+    """
     if not indices:
-        return {}
+        return {}, 0, 0
+
     n = len(indices)
     bs = choose_batch_size(n)
     out: Dict[int, bool] = {}
     batches = {}
+    skipped = 0
+    to_submit: List[Tuple[int, dict]] = []
+
     for lo, hi in chunk_indices(n, bs):
-        reqs = []
         for pos in range(lo, hi):
             idx = indices[pos]
-            # prefer classifying the latest response; fall back to rewritten text
             text = rows[idx]["response"] or rows[idx]["rewritten_instruction"]
-            reqs.append(build_classifier_request(row_id=f"classify-{idx}", text=text, model=model))
-        bid = _submit_batch(reqs)
-        batches[bid] = {"kind": "classify"}
+            req = build_classifier_request(row_id=f"classify-{idx}", text=text, model=model)
+
+            if req.get("method") == "SKIP":
+                # Regex pre-filter: immediate result, no API call
+                out[idx] = True
+                skipped += 1
+            else:
+                to_submit.append((idx, req))
+
+        if to_submit:
+            reqs = [r for _, r in to_submit]
+            bid = _submit_batch(reqs)
+            batches[bid] = {"kind": "classify", "map": [i for i, _ in to_submit]}
+            to_submit = []
+
     results = _poll_batches(batches)
-    for info in results.values():
+
+    for bid, info in results.items():
         if info["status"] != "completed":
             continue
         for r in info["results"]:
@@ -107,7 +127,13 @@ def _run_stage_classify(rows: List[Dict], indices: List[int], model: str) -> Dic
                 out[ridx] = parse_classifier_result(r)
             except Exception as e:
                 print(f"⚠️ classify parse error: {e}")
-    return out
+
+    total = len(indices)
+    used_api = total - skipped
+    print(f"📊 Classification summary → {total} total | {skipped} via regex | {used_api} via API")
+
+    return out, skipped, used_api
+
 
 
 def _run_stage_rewrite(rows: List[Dict], indices: List[int], model: str) -> Dict[int, str]:
@@ -178,45 +204,51 @@ def process_dataset(
     answer_model:     str = "gpt-4.1-mini",
     rounds: int = 3,
 ) -> None:
-    """
-    Three-stage recursive cleaner (Batch API only):
-      1) classify → 2) rewrite flagged → 3) answer rewritten
-      repeat for `rounds`, then final classify and DROP refusals.
-    """
     rows = _load_jsonl(input_file)
     print(f"📥 Loaded {len(rows)} rows from {input_file}")
+
+    total_regex = 0
+    total_api = 0
 
     for round_idx in range(1, rounds + 1):
         print(f"\n🔁 Round {round_idx} starting with {len(rows)} rows")
 
-        # 1) classify all
         all_idx = list(range(len(rows)))
-        cls_map = _run_stage_classify(rows, all_idx, classifier_model)
+        cls_map, skipped, used_api = _run_stage_classify(rows, all_idx, classifier_model)
+        total_regex += skipped
+        total_api += used_api
+
         flagged = [i for i, is_ref in cls_map.items() if is_ref]
         print(f"⚠️ Classifier flagged {len(flagged)} rows")
 
         if not flagged:
             break
 
-        # 2) rewrite the flagged
         rew_map = _run_stage_rewrite(rows, flagged, rewriter_model)
         print(f"✍️ Rewrote {len(rew_map)} rows")
         for i, new_text in rew_map.items():
             if new_text:
                 rows[i]["rewritten_instruction"] = new_text
 
-        # 3) answer the flagged
         ans_map = _run_stage_answer(rows, flagged, answer_model)
         print(f"💬 Answered {len(ans_map)} rows")
         for i, answer in ans_map.items():
             rows[i]["response"] = answer
 
-    # Final pass: drop still-refusing
+    # Final pass
     print("\n🔍 Final refusal pass and drop")
-    final_map = _run_stage_classify(rows, list(range(len(rows))), classifier_model)
+    final_map, skipped, used_api = _run_stage_classify(rows, list(range(len(rows))), classifier_model)
+    total_regex += skipped
+    total_api += used_api
+
     keep_rows = [r for i, r in enumerate(rows) if final_map.get(i) is False]
     dropped = len(rows) - len(keep_rows)
     print(f"🗑 Dropped {dropped} refusals; kept {len(keep_rows)}")
+
+    # Cumulative usage report
+    print(f"\n📊 Cumulative classifier usage across all rounds:")
+    print(f"   - {total_regex} rows handled via regex pre-filter")
+    print(f"   - {total_api} rows handled via API")
 
     _dump_jsonl(output_file, keep_rows)
     print(f"✅ Finished → {output_file}")
